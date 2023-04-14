@@ -1,0 +1,115 @@
+#define USE_AVG   // กำหนดค่าคอมไพเลอร์ว่าจะใช้การหาค่าเฉลี่ยหรือไม่
+#include <Wire.h>  // เรียกใช้งานไลบรารี่ Wire
+#include <LiquidCrystal_I2C.h>  // เรียกใช้งานไลบรารี่ LiquidCrystal_I2C
+#include <DHT.h> // เรียกใช้งานไลบรารี่ DHT
+#include <MQ7.h> // เรียกใช้งานไลบรารี่ MQ-7
+
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // กำหนดที่อยู่ของ LCD และขนาดของหน้าจอ
+DHT dht(2, DHT11); // กำหนดขาที่เชื่อมต่อกับ DHT11
+MQ7 mq7(0); // กำหนดขาที่เชื่อมต่อกับ MQ-7
+
+const int sharpLEDPin = 7;   // กำหนดขา LED ที่ใช้งาน
+const int sharpVoPin = A0;   // กำหนดขา Analog Input ที่ใช้งาน
+
+#ifdef USE_AVG
+#define N 100  // กำหนดค่าคงที่ N มีค่าเท่ากับ 100
+static unsigned long VoRawTotal = 0;  // กำหนดตัวแปร VoRawTotal เพื่อเก็บผลรวมของค่า VoRaw
+static int VoRawCount = 0;  // กำหนดตัวแปร VoRawCount เพื่อเก็บจำนวนครั้งที่อ่านค่า VoRaw
+#endif 
+
+static float Voc = 0.6;  // กำหนดค่า Voc เป็น 0.6
+static float VocT = 0.6;  // กำหนดค่า VocT เป็น 0.6
+
+const float K = 0.5;  // กำหนดค่าคงที่ K เป็น 0.5
+
+// ฟังก์ชัน printValue ใช้สำหรับแสดงค่าของตัวแปรชนิด unsigned int ออกทาง Serial
+void printValue(String text, unsigned int value, bool isLast = false) {
+  Serial.print(text);
+  Serial.print("=");
+  Serial.print(value);
+  if (!isLast) {
+    Serial.print(", ");
+  }
+}
+
+// ฟังก์ชัน printFValue ใช้สำหรับแสดงค่าของตัวแปรชนิด float ออกทาง Serial
+void printFValue(String text, float value, String units, bool isLast = false) {
+  Serial.print(text);
+  Serial.print("=");
+  Serial.print(value);
+  Serial.print(units);
+  if (!isLast) {
+    Serial.print(", ");
+  }
+    else {
+    Serial.println();
+  }
+}
+void setup() {
+  pinMode(sharpLEDPin, OUTPUT); // กำหนดว่าขาที่เชื่อมต่อกับ LED สำหรับเซ็นเซอร์ Sharp GP2Y1010AU0F จะทำงานเป็น OUTPUT
+  
+  Serial.begin(9600); // เริ่มต้นการใช้งาน Serial Monitor ที่ความเร็ว 9600 bps
+  lcd.begin();        // เริ่มต้นการใช้งาน LCD
+  lcd.backlight();    // เปิดไฟหน้าจอ LCD
+  lcd.clear();        // ล้างหน้าจอ LCD
+  lcd.setCursor(0, 0); // กำหนดตำแหน่งเริ่มต้นของเคอร์เซอร์บนหน้าจอ LCD
+  lcd.print("Dust Density:"); // แสดงข้อความ "Dust Density:" บนหน้าจอ
+  
+  delay(2000); // หน่วงเวลา 2 วินาที
+  Serial.println(""); // พิมพ์ขึ้นบรรทัดใหม่ใน Serial Monitor
+  Serial.println("PM2.5"); // พิมพ์ข้อความ "PM2.5" ใน Serial Monitor
+  Serial.println("================="); // พิมพ์ข้อความ "=================" ใน Serial Monitor
+  VocT = Voc; // กำหนดค่าตัวแปร VocT เท่ากับค่าตัวแปร Voc
+}
+
+void loop() {  
+digitalWrite(sharpLEDPin, LOW); // กำหนดให้ขาที่เชื่อมต่อกับ LED สำหรับเซ็นเซอร์ Sharp GP2Y1010AU0F ส่งสัญญาณ LOW
+  
+delayMicroseconds(280); // หน่วงเวลา 280 ไมโครวินาที
+  
+int VoRaw = analogRead(sharpVoPin); // อ่านค่าแรงดันที่ขา Vo แล้วเก็บไว้ในตัวแปร VoRaw
+  
+digitalWrite(sharpLEDPin, HIGH); // กำหนดให้ขาที่เชื่อมต่อกับ LED สำหรับเซ็นเซอร์ Sharp GP2Y1010AU0F ส่งสัญญาณ HIGH
+delayMicroseconds(9620);  // กำหนดให้เซ็นเซอร์รอการวัด 9620 ไมโครวินาที
+
+#ifdef PRINT_RAW_DATA
+printValue("VoRaw", VoRaw, true);  // พิมพ์ค่า VoRaw ถ้าตัวแปร PRINT_RAW_DATA ถูกกำหนดไว้ในโปรแกรม
+Serial.println("");
+#endif 
+
+float Vo = VoRaw;  // กำหนดค่า Vo เป็นค่า VoRaw
+
+#ifdef USE_AVG
+VoRawTotal += VoRaw;  // เพิ่มค่า VoRaw ในตัวแปร VoRawTotal
+VoRawCount++;  // เพิ่มค่า VoRawCount ขึ้น 1
+
+if ( VoRawCount >= N ) {  // เมื่อ VoRawCount เท่ากับหรือมากกว่า N
+Vo = 1.0 * VoRawTotal / N;  // คำนวณค่า Vo โดยหารค่า VoRawTotal ด้วย N
+VoRawCount = 0;  // กำหนดค่า VoRawCount เป็น 0
+VoRawTotal = 0;  // กำหนดค่า VoRawTotal เป็น 0
+} else {
+return;  // หยุดการทำงานของฟังก์ชัน
+}
+#endif // USE_AVG
+
+Vo = Vo / 1024.0 * 5.0;  // คำนวณค่า Vo โดยหาร Vo ด้วย 1024 และคูณด้วย 5
+printFValue("Vo", Vo*1000.0, "mV");  // พิมพ์ค่า Vo เป็นหน่วย mV
+printFValue("Voc", Voc*1000.0, "mV");  // พิมพ์ค่า Voc เป็นหน่วย mV
+
+float dV = Vo - VocT;  // คำนวณค่า dV โดยหัก Vo ด้วย VocT
+if ( dV < 0 ) {  // ถ้า dV น้อยกว่า 0
+dV = 0;  // กำหนดค่า dV เป็น 0
+}
+float dustDensity = dV / K * 100.0;  // คำนวณค่า dustDensity โดยหาร dV ด้วย K และคูณด้วย 100
+
+String SPT1 = "";  // กำหนดค่า SPT1 เป็น string ว่าง
+SPT1 = ("Dust Density(Voc ");  // เพิ่มข้อความ "Dust Density(Voc " เข้าไปใน SPT1
+SPT1 += Voc;//เพิ่มค่าตัวแปร Voc ในตัวแปร SPT1 โดยใช้ตัวดำเนินการบวกเท่ากับ (+=) ซึ่งเป็นการเพิ่มค่าของตัวแปรด้วยตัวมันเอง
+SPT1 += (" V)");//เพิ่มข้อความ " V)" ในตัวแปร SPT1 โดยใช้ตัวดำเนินการบวกเท่ากับ (+=) ซึ่งเป็นการเพิ่มข้อความในตัวแปรด้วยตัวมันเอง
+lcd.setCursor(0, 1); //ตั้งค่าตำแหน่งของหน้าจอ LCD ให้เริ่มแสดงผลข้อมูลตำแหน่ง (0,1) ซึ่งหมายถึงแถวที่ 2 และคอลัมน์ที่ 1 ของหน้าจอ LCD
+lcd.print(dustDensity);//แสดงค่าตัวแปร dustDensity บนหน้าจอ LCD
+lcd.print("  ug/m3");//แสดงข้อความ " ug/m3" บนหน้าจอ LCD
+printFValue(SPT1, dustDensity, "ug/m3", true);//เป็นการเรียกใช้ฟังก์ชัน printFValue โดยส่งพารามิเตอร์เข้าไป 4 ตัว ได้แก่ SPT1, dustDensity, ข้อความ "ug/m3", และค่า true โดยเป็นการแสดงผลข้อมูลที่อยู่ในตัวแปร SPT1 และ dustDensity โดยมีหน่วยวัดเป็น "ug/m3" และเป็นการแสดงผลแบบพิมพ์หน้าจอ
+Serial.println("");//แสดงข้อมูลว่างบน Serial Monitor โดยใช้ฟังก์ชัน println เพื่อแสดงข้อมูลในบรรทัดใหม่หลังจากข้อมูลก่อนหน้า
+  
+} 
